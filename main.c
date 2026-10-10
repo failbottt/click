@@ -10,6 +10,7 @@
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
 
+float font_size = 32.0f;
 int bitmap_width = 1024;
 int bitmap_height = 1024;
 unsigned char ttf_buffer[1<<20];
@@ -94,8 +95,9 @@ typedef struct Game
     u8 clicked;
     f32 timer;
     u64 frame;
-    u32 box_pos_x;
-    u32 box_pos_y;
+    u64 box_pos_x;
+    u64 box_pos_y;
+    u64 score;
 } Game;
 Game game = {.mouse_x = 0, .mouse_y = 0, .clicked = 0, .timer = 30.f, .frame = 0};
 
@@ -424,6 +426,17 @@ Win32MainWindowCallback(HWND Window,
             GlobalRunning = 0;
         } break;
 
+        case WM_SIZE:
+        {
+            int width = LOWORD(LParam);
+            int height = HIWORD(LParam);
+
+            if (width > 0 && height > 0)
+            {
+                Win32ResizeDIBSection(&global_back_buffer, width, height);
+            }
+        } break;
+
         case WM_ACTIVATEAPP:
         {
             OutputDebugStringA("WM_ACTIVATEAPP\n");
@@ -442,15 +455,6 @@ Win32MainWindowCallback(HWND Window,
             game.mouse_x = posx;
             game.mouse_y = posy;
             game.clicked = TRUE;
-            char buffer[256];
-            _snprintf_s(
-                    buffer,
-                    sizeof(buffer),
-                    256,
-                    "x(%lld) y(%lld)\n",
-                    posx,
-                    posy);
-            OutputDebugStringA(buffer);
         } break;
 
         case WM_MOUSEMOVE:
@@ -577,10 +581,24 @@ clear_screen(GameOffscreenBuffer *Buffer)
     }
 }
 
+// @fix: writes past end of the buffer and crashes
 inline void
-draw_square(GameOffscreenBuffer *Buffer, u64 square_height, u64 square_width, u64 posx, u64 posy)
+draw_square(GameOffscreenBuffer *Buffer, u64 square_height, u64 square_width, u64 posx, u64 posy, u64 r, u64 g, u64 b)
 {
-    u8 *Row = (u8 *)Buffer->Memory + (posy * Buffer->Pitch) + (posx * sizeof(u32));
+    u64 x = posx;
+    u64 y = posy;
+
+    if ((x + square_width) > SCREEN_WIDTH - 1)
+    {
+        x = SCREEN_WIDTH - 1;
+    }
+
+    if ((y + square_height) > SCREEN_HEIGHT - 1)
+    {
+        y = SCREEN_HEIGHT - 1;
+    }
+
+    u8 *Row = (u8 *)Buffer->Memory + (y * Buffer->Pitch) + (x * sizeof(u32));
     for(int Y = 0;
             Y < square_height;
             ++Y)
@@ -590,9 +608,7 @@ draw_square(GameOffscreenBuffer *Buffer, u64 square_height, u64 square_width, u6
                 X < square_width;
                 ++X)
         {
-            u8 Blue = 123;
-            u8 Green = 234;
-            *Pixel++ = ((Green << 8) | Blue);
+            *Pixel++ = ((255 << 24) | (r << 16) | (g << 8) | b);
         }
 
         Row += Buffer->Pitch;
@@ -711,6 +727,9 @@ WinMain(HINSTANCE Instance,
 
     if(RegisterClassA(&WindowClass))
     {
+        RECT rect = {0, 0, SCREEN_WIDTH, SCREEN_HEIGHT};
+        AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+
         HWND Window =
             CreateWindowExA(
                 0,
@@ -719,8 +738,8 @@ WinMain(HINSTANCE Instance,
                 WS_OVERLAPPEDWINDOW|WS_VISIBLE,
                 0,
                 0,
-                SCREEN_WIDTH,
-                SCREEN_HEIGHT,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
                 0,
                 0,
                 Instance,
@@ -865,7 +884,6 @@ WinMain(HINSTANCE Instance,
                     game.timer -= deltaTime;
                     if (game.timer <= 0.f || game.frame == 0)
                     {
-
                         float NormalizedX = (float)rand() / (float)RAND_MAX;
                         float NormalizedY = (float)rand() / (float)RAND_MAX;
 
@@ -881,36 +899,58 @@ WinMain(HINSTANCE Instance,
                     game.frame++;
 
                     clear_screen(&Buffer);
-                    draw_square(&Buffer, square_width, square_height, game.box_pos_x, game.box_pos_y);
+                    draw_square(&Buffer, square_width, square_height, game.box_pos_x, game.box_pos_y, 0, 255, 0);
 
                     f32 x = 0.f;
                     f32 y = 50.f;
 
-                    char text[256];
-                    int written = _snprintf_s(
-                            text,
-                            sizeof(text),
-                            256,
-                            "x(%lld), y(%lld)",
-                            game.mouse_x,
-                            game.mouse_y);
-                    text[written + 1] = '\0';
+                    {
+                        char text[256];
+                        int written = _snprintf_s(
+                                text,
+                                sizeof(text),
+                                256,
+                                "x(%lld), y(%lld)",
+                                game.mouse_x,
+                                game.mouse_y);
+                        text[written + 1] = '\0';
 
-                    draw_text(&Buffer, text, (written + 1), x, y);
+                        draw_text(&Buffer, text, (written + 1), x, y);
+                    }
 
+                    {
+                        char text[256];
+                        int written = _snprintf_s(
+                                text,
+                                sizeof(text),
+                                256,
+                                "box_x(%lld), box_y(%lld)",
+                                game.box_pos_x,
+                                game.box_pos_y);
+                        text[written + 1] = '\0';
+                        draw_text(&Buffer, text, (written + 1), x, y + 20);
+                    }
+
+                    {
+                        char text[256];
+                        int written = _snprintf_s(
+                                text,
+                                sizeof(text),
+                                256,
+                                "score: (%lld)",
+                                game.score);
+                        text[written + 1] = '\0';
+                        draw_text(&Buffer, text, (written + 1), (int)((int)SCREEN_WIDTH / 2) - (strlen(text)*3), 25);
+                    }
 
                     if (game.clicked)
                     {
-                        // if (
-                        //         (game.mouse_y >= game.box_pos_y && game.mouse_y <= game.box_pos_y + square_height) &&
-                        //         (game.mouse_x >= game.box_pos_x && game.mouse_x <= game.box_pos_x + square_width)
-                        //    )
-                        if (game.mouse_y >= game.box_pos_y)
+                        if (
+                                (game.mouse_y >= game.box_pos_y && game.mouse_y <= game.box_pos_y + square_height) &&
+                                (game.mouse_x >= game.box_pos_x && game.mouse_x <= game.box_pos_x + square_width)
+                           )
                         {
-                            OutputDebugStringA("Clicked inside of box\n");
-                            draw_square(&Buffer, square_width, square_height, 20, 20);
-                            game.box_pos_x = 0;
-                            game.box_pos_y = 0;
+                            game.score++;
                         }
 
                         game.clicked = 0;
